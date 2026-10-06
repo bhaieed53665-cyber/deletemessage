@@ -97,6 +97,114 @@ def get_archived_threads(channel_id):
     return threads
 
 
+def clean_channel_fast(channel_id, my_id):
+    """يبحث عن رسائلك أنت فقط بالقناة ويحذفها (بدون فحص رسائل الناس)."""
+    global total_deleted
+    if not GUILD_ID:
+        print("GUILD_ID مش موجود، رح يستخدم الفحص العادي")
+        return clean_channel(channel_id, channel_id, my_id)
+
+    deleted_here = 0
+    offset = 0
+    empty_retries = 0
+
+    while True:
+        r = request(
+            "GET",
+            f"{API}/guilds/{GUILD_ID}/messages/search",
+            params={
+                "author_id": my_id,
+                "channel_id": channel_id,
+                "include_nsfw": "true",
+                "offset": offset,
+            },
+        )
+        if r.status_code == 202:  # الفهرس لسا عم يجهز
+            time.sleep(r.json().get("retry_after", 2))
+            continue
+        if r.status_code != 200:
+            print(f"خطأ بالبحث: {r.status_code} {r.text[:100]}")
+            break
+
+        data = r.json()
+        total = data.get("total_results", 0)
+        hits = [
+            m
+            for group in data.get("messages", [])
+            for m in group
+            if m.get("hit") and m["author"]["id"] == my_id
+        ]
+
+        if not hits:
+            if total == 0:
+                break  # خلصت رسائلك فعلاً
+            empty_retries += 1
+            if empty_retries >= 5:
+                print("البحث رجع صفحة فاضية رغم وجود رسائل، تحويل للفحص العادي")
+                return clean_channel(channel_id, channel_id, my_id)
+            time.sleep(5)
+            continue
+        empty_retries = 0
+
+        print(f"رسائلك المتبقية بالقناة تقريباً: {total}")
+        failed = 0
+        for m in hits:
+            if m["type"] not in DELETABLE_MSG_TYPES:
+                failed += 1
+                continue
+            d = request("DELETE", f"{API}/channels/{channel_id}/messages/{m['id']}")
+            if d.status_code in (204, 404):
+                deleted_here += 1
+                total_deleted += 1
+                if total_deleted % 10 == 0:
+                    print(f"تم الحذف: {total_deleted}")
+            else:
+                failed += 1
+                print(f"فشل حذف رسالة: {d.status_code} {d.text[:80]}")
+            time.sleep(0.3)
+        offset += failed
+
+    print(f"[{channel_id}] خلصت. تم حذف {deleted_here} | المجموع: {total_deleted}")
+
+
+def diagnose(my_id):
+    """يعدّ رسائلك بكل قناة بالسيرفر بدون حذف أي شي."""
+    ch = request("GET", f"{API}/guilds/{GUILD_ID}/channels")
+    if ch.status_code != 200:
+        print("ما قدرت اجيب القنوات:", ch.status_code, ch.text)
+        return
+    chans = [(c["id"], c["name"]) for c in ch.json() if c["type"] in CHANNEL_TYPES]
+    t = request("GET", f"{API}/guilds/{GUILD_ID}/threads/active")
+    if t.status_code == 200:
+        chans += [(x["id"], f"thread:{x['name']}") for x in t.json().get("threads", [])]
+
+    print(f"تشخيص {len(chans)} قناة...")
+    results = []
+    for cid, name in chans:
+        while True:
+            r = request(
+                "GET",
+                f"{API}/guilds/{GUILD_ID}/messages/search",
+                params={"author_id": my_id, "channel_id": cid, "include_nsfw": "true"},
+            )
+            if r.status_code == 202:  # الفهرس لسا عم يجهز
+                time.sleep(r.json().get("retry_after", 2))
+                continue
+            break
+        if r.status_code == 200:
+            n = r.json().get("total_results", 0)
+            if n:
+                results.append((n, cid, name))
+                print(f"{name} | ID: {cid} | رسائلك: {n}")
+        time.sleep(1)
+
+    results.sort(reverse=True)
+    print("===== الأعلى =====")
+    for n, cid, name in results[:15]:
+        print(f"{n} رسالة | {name} | {cid}")
+    print(f"المجموع: {sum(n for n, _, _ in results)}")
+
+
 def main():
     me = request("GET", f"{API}/users/@me")
     if me.status_code != 200:
@@ -105,11 +213,19 @@ def main():
     my_id = me.json()["id"]
     print("تسجيل الدخول كـ", me.json().get("username"))
 
+    # وضع التشخيص: DIAGNOSE=1 بيعدّ رسائلك بكل قناة بدون حذف
+    if os.environ.get("DIAGNOSE") == "1":
+        if not GUILD_ID:
+            print("لازم تحط GUILD_ID للتشخيص")
+            return
+        diagnose(my_id)
+        return
+
     # إذا حددت قنوات، احذف منها فقط وبدون المرور على باقي السيرفر
     if CHANNEL_IDS:
         print(f"عدد القنوات المحددة: {len(CHANNEL_IDS)}")
         for cid in CHANNEL_IDS:
-            clean_channel(cid, cid, my_id)
+            clean_channel_fast(cid, my_id)
         print(f"خلصنا. تم حذف {total_deleted} رسالة.")
         return
 
