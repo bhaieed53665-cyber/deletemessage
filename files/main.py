@@ -3,7 +3,9 @@ import time
 import requests
 
 TOKEN = os.environ["DISCORD_TOKEN"]   # توكن حسابك (من متغيرات Railway)
-GUILD_ID = os.environ["GUILD_ID"]     # ID السيرفر
+GUILD_ID = os.environ.get("GUILD_ID")  # ID السيرفر (مطلوب فقط إذا ما حددت قنوات)
+# IDs القنوات المطلوبة مفصولة بفاصلة، مثال: 111,222,333 (اتركه فاضي لحذف كل السيرفر)
+CHANNEL_IDS = [c.strip() for c in os.environ.get("CHANNEL_IDS", "").split(",") if c.strip()]
 
 API = "https://discord.com/api/v9"
 HEADERS = {
@@ -96,6 +98,18 @@ def main():
         return
     my_id = me.json()["id"]
     print("تسجيل الدخول كـ", me.json().get("username"))
+
+    # إذا حددت قنوات، احذف منها فقط وبدون المرور على باقي السيرفر
+    if CHANNEL_IDS:
+        print(f"عدد القنوات المحددة: {len(CHANNEL_IDS)}")
+        for cid in CHANNEL_IDS:
+            clean_channel(cid, cid, my_id)
+        print(f"خلصنا. تم حذف {total_deleted} رسالة.")
+        return
+
+    if not GUILD_ID:
+        print("لازم تحط GUILD_ID أو CHANNEL_IDS")
+        return
 
     ch = request("GET", f"{API}/guilds/{GUILD_ID}/channels")
     if ch.status_code != 200:
