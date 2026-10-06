@@ -41,6 +41,7 @@ def clean_channel(channel_id, name, my_id):
     global total_deleted
     before = None
     deleted_here = 0
+    scanned = 0
 
     while True:
         params = {"limit": 100}
@@ -59,6 +60,9 @@ def clean_channel(channel_id, name, my_id):
         if not msgs:
             break
         before = msgs[-1]["id"]  # الترقيم بيعتمد على آخر رسالة بالدفعة، فالحذف ما بيأثر عليه
+        scanned += len(msgs)
+        if scanned % 1000 < 100:
+            print(f"[{name}] تم فحص {scanned} رسالة | حذف {deleted_here}")
 
         for m in msgs:
             if m["author"]["id"] != my_id or m["type"] not in DELETABLE_MSG_TYPES:
@@ -67,8 +71,10 @@ def clean_channel(channel_id, name, my_id):
             if d.status_code in (204, 404):
                 deleted_here += 1
                 total_deleted += 1
-                if total_deleted % 50 == 0:
-                    print(f"المجموع حتى الآن: {total_deleted}")
+                if total_deleted % 10 == 0:
+                    print(f"تم الحذف: {total_deleted}")
+            else:
+                print(f"فشل حذف رسالة: {d.status_code} {d.text[:80]}")
             time.sleep(0.3)
 
     print(f"[{name}] تم حذف {deleted_here} | المجموع: {total_deleted}")
